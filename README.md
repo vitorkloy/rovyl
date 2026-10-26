@@ -93,3 +93,7 @@ version, you have to release its source under the same licence.
 
 The copyright holder is not bound by that outbound licence, so the build sold on the
 Microsoft Store is distributed under Microsoft's standard terms. Both are the same code.
+
+## Fork
+
+Este repositório é um fork de [HenryCauan/rovyl](https://github.com/HenryCauan/rovyl), criado e mantido por **HenryCauan** (HenryCa). Todo o crédito pelo projeto original é do autor. O código continua licenciado sob a **GNU GPL-3.0** (ver [LICENSE](LICENSE)); as alterações deste fork seguem a mesma licença.
