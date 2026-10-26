@@ -12,6 +12,7 @@ const {
   session,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const { Notification: UpdateNotification } = require("electron");
 const path = require("path");
 const { exec, spawn, execFile, execFileSync } = require("child_process");
 const os = require("os");
@@ -2743,14 +2744,45 @@ function configureAutoUpdates() {
     if (!isNewerThanInstalled(info?.version)) return;
     diagLog(`[Update] Downloaded version ${info.version}`);
     notifyRendererUpdateState("ready", info.version);
+    showUpdateToast(info.version);
   });
 
-  // Let the UI finish starting before the network request begins.
-  setTimeout(() => {
+  /**
+   * Mesma abordagem do ShiftDrop: checa as Releases do GitHub (vitorkloy/rovyl, via `latest.yml`)
+   * alguns segundos depois de abrir e de novo a cada 15 minutos.
+   */
+  const runUpdateCheck = () =>
     autoUpdater.checkForUpdates().catch((error) => {
       diagLog(`[Update] Check failed: ${error?.message || error}`);
     });
-  }, 10_000).unref?.();
+  setTimeout(runUpdateCheck, 10_000).unref?.();
+  setInterval(runUpdateCheck, UPDATE_CHECK_INTERVAL_MS).unref?.();
+}
+
+const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+let lastToastedUpdateVersion = null;
+
+/**
+ * Notificação nativa do Windows, uma vez por versão (como o `maybe_toast` do ShiftDrop).
+ * Clicar nela instala agora; ignorar mantém a instalação ao sair.
+ */
+function showUpdateToast(version) {
+  if (!version || lastToastedUpdateVersion === version) return;
+  lastToastedUpdateVersion = version;
+  try {
+    if (!UpdateNotification.isSupported()) return;
+    const toast = new UpdateNotification({
+      title: "Nova versão do Rovyl",
+      body: `A versão ${version} está disponível. Clique para atualizar agora (ou ela instala ao fechar o Rovyl).`,
+    });
+    toast.on("click", () => {
+      diagLog(`[Update] Toast clicked — installing ${version}`);
+      beginUpdateInstall();
+    });
+    toast.show();
+  } catch (error) {
+    diagLog(`[Update] Toast not shown: ${error?.message || error}`);
+  }
 }
 
 app.whenReady().then(async () => {
