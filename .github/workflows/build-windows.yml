@@ -6,15 +6,26 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # Chamado pelo sync-upstream (push com GITHUB_TOKEN não dispara outros workflows).
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+      release_tag:
+        type: string
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -31,25 +42,27 @@ jobs:
         with:
           name: rovyl-windows
           path: |
-            build-out/*.exe
-            build-out/*.blockmap
+            build-out/Rovyl.exe
+            build-out/Rovyl.exe.blockmap
             build-out/latest.yml
           if-no-files-found: error
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: rovyl-windows
           path: dist
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (uma vez por tag)
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then TAG="$GITHUB_REF_NAME"; else TAG="manual-${GITHUB_RUN_NUMBER}"; fi
-          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "Rovyl $TAG" --generate-notes --target "$GITHUB_SHA"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG já existe — nada a fazer."; exit 0
+          fi
+          gh release create "$TAG" dist/Rovyl.exe dist/Rovyl.exe.blockmap dist/latest.yml \
+            --repo "$GITHUB_REPOSITORY" --title "Rovyl $TAG" --generate-notes --verify-tag
