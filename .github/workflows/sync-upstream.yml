@@ -2,7 +2,7 @@ name: Sync upstream
 
 # Traz o main de HenryCauan/rovyl para o main do fork.
 # - Nada novo: termina.
-# - Merge limpo: sobe a versão patch, commita, cria tag v<versão> e compila + publica a release
+# - Merge limpo: sobe a versão patch, commita, cria tag v<versão> e compila + publica a release (Windows, macOS, Linux)
 #   no MESMO workflow (push com GITHUB_TOKEN não dispara outros workflows).
 # - Conflito: abre PR, sem release.
 # Limitação: GITHUB_TOKEN não pode dar push em commits que alteram .github/workflows. Se o upstream

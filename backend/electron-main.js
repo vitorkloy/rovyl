@@ -18,6 +18,8 @@ const { exec, spawn, execFile, execFileSync } = require("child_process");
 const os = require("os");
 const fs = require("fs");
 const win32Launch = require("./win32-launch");
+/** macOS/Linux: gatilho do rato, lista de apps, ícones e lançamento (ver backend/platform-unix.cjs). */
+const unixPlatform = process.platform === "win32" ? null : require("./platform-unix.cjs");
 const { normalizeFullPersistenceBlob } = require("./persistence-normalize.cjs");
 const { detectGameExecutable } = require("./game-detection.cjs");
 const crypto = require("crypto");
@@ -1790,6 +1792,17 @@ function setRadialMouseBlocking(bounds, monitorBounds) {
  * simples e e devolvido a janela por baixo; acima disso o gesto foi uma mira e nao se devolve nada.
  */
 function setRadialTriggerCapture(virtualKey, mode, slop) {
+  if (unixPlatform) {
+    const button = Object.keys(MOUSE_TRIGGER_VK).find((k) => MOUSE_TRIGGER_VK[k] === virtualKey) || "middle";
+    unixPlatform.armTrigger(
+      button,
+      (line) => {
+        if (radialTriggerListener) radialTriggerListener(line);
+      },
+      diagLog,
+    );
+    return;
+  }
   if (process.platform !== "win32") return;
   ensureRadialMouseBlocker();
   /** Remembered so a replacement helper comes up armed the same way. */
@@ -1798,6 +1811,10 @@ function setRadialTriggerCapture(virtualKey, mode, slop) {
 }
 
 function clearRadialTriggerCapture() {
+  if (unixPlatform) {
+    unixPlatform.disarmTrigger();
+    return;
+  }
   if (process.platform !== "win32") return;
   /** No trigger armed: a helper that dies now has nothing to be brought back for. */
   lastRadialTriggerCommand = null;
@@ -2669,7 +2686,7 @@ function isNewerThanInstalled(version) {
  */
 function beginUpdateInstall() {
   if (updateInstallInProgress) return false;
-  if (!app.isPackaged || process.platform !== "win32" || isStoreBuild()) return false;
+  if (!app.isPackaged || !canSelfInstallUpdate() || isStoreBuild()) return false;
   if (lastKnownUpdate.state !== "ready") return false;
 
   diagLog(`[Update] Installing version ${lastKnownUpdate.version ?? "?"}`);
@@ -2697,8 +2714,21 @@ function beginUpdateInstall() {
   return true;
 }
 
+/**
+ * Como no ShiftDrop: Windows (NSIS) e Linux AppImage trocam o próprio binário. macOS sem
+ * assinatura não pode auto-instalar (o Squirrel.Mac recusa) e o .deb precisa de root — nesses
+ * casos só avisamos e abrimos a página da release.
+ */
+const UPDATE_RELEASES_URL = "https://github.com/vitorkloy/rovyl/releases/latest";
+function canSelfInstallUpdate() {
+  if (process.platform === "win32") return true;
+  if (process.platform === "linux") return Boolean(process.env.APPIMAGE);
+  return false;
+}
+
 function configureAutoUpdates() {
-  if (!app.isPackaged || process.platform !== "win32") return;
+  if (!app.isPackaged) return;
+  if (!["win32", "darwin", "linux"].includes(process.platform)) return;
 
   /**
    * Build da Store: nem sequer registamos os listeners. Não basta não chamar `checkForUpdates` —
@@ -2710,7 +2740,7 @@ function configureAutoUpdates() {
     return;
   }
 
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = canSelfInstallUpdate();
   /**
    * Install-on-quit is ours, in `beginUpdateInstall`. The `electron-updater` one runs on the
    * `quit` event, which this app does not always emit (it exits through `app.exit(0)`) and which
@@ -2726,6 +2756,13 @@ function configureAutoUpdates() {
     /** Announcing a version that is not above the installed one is the badge asking for what is already done. */
     if (!isNewerThanInstalled(info?.version)) {
       diagLog(`[Update] Ignoring version ${info?.version} — not above ${app.getVersion()}`);
+      return;
+    }
+    if (!canSelfInstallUpdate()) {
+      diagLog(`[Update] Version ${info.version} available — notify only on ${process.platform}`);
+      /** "ready" mostra o botão de atualizar; aqui ele abre a página da release. */
+      notifyRendererUpdateState("ready", info.version);
+      showUpdateToast(info.version);
       return;
     }
     diagLog(`[Update] Downloading version ${info.version}`);
@@ -2775,7 +2812,14 @@ function showUpdateToast(version) {
       title: "Nova versão do Rovyl",
       body: `A versão ${version} está disponível. Clique para atualizar agora (ou ela instala ao fechar o Rovyl).`,
     });
+    if (!canSelfInstallUpdate()) {
+      toast.body = `A versão ${version} está disponível. Clique para abrir a página de download.`;
+    }
     toast.on("click", () => {
+      if (!canSelfInstallUpdate()) {
+        shell.openExternal(UPDATE_RELEASES_URL).catch(() => {});
+        return;
+      }
       diagLog(`[Update] Toast clicked — installing ${version}`);
       beginUpdateInstall();
     });
@@ -2787,6 +2831,9 @@ function showUpdateToast(version) {
 
 app.whenReady().then(async () => {
   if (!gotTheLock) return;
+
+  /** macOS: launcher de bandeja, sem ícone no Dock. */
+  if (process.platform === "darwin") app.dock?.hide();
 
   /**
    * Compila/inicializa o helper em repouso; ao abrir o radial o bloqueio entra sem atraso.
@@ -5666,6 +5713,18 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
 
     let methodsToTry = [];
 
+    if (unixPlatform) {
+      try {
+        await unixPlatform.launch(resolvedCommand);
+        diagLog(`[Exec] Unix launch ok: ${resolvedCommand}`);
+      } catch (err) {
+        const finalError = `Failed to run "${resolvedCommand.substring(0, 50)}". Error: ${err.message}`;
+        diagLog(`[Exec] ${finalError}`);
+        if (mainWindow) mainWindow.webContents.send("execution-error", finalError);
+      }
+      return;
+    }
+
     if (commandType === "app") {
       let finalCommand = resolvedCommand.trim();
       const originalAumidCommand = finalCommand; // Keep original in case mapping fails
@@ -5983,7 +6042,7 @@ ipcMain.handle("get-update-state", () => lastKnownUpdate);
  * confirmar agora — e para dar uma resposta visível a quem carrega no botão.
  */
 ipcMain.handle("check-for-updates", async () => {
-  if (!app.isPackaged || process.platform !== "win32") {
+  if (!app.isPackaged) {
     return { ok: false, code: "UNSUPPORTED", state: lastKnownUpdate.state };
   }
   /** Na Store o botão nem aparece; o guarda fica para o caso de alguém chamar o canal à mão. */
@@ -5994,7 +6053,7 @@ ipcMain.handle("check-for-updates", async () => {
     const result = await autoUpdater.checkForUpdates();
     const version = result?.updateInfo?.version;
     if (isNewerThanInstalled(version)) {
-      return { ok: true, state: "downloading", version };
+      return { ok: true, state: canSelfInstallUpdate() ? "downloading" : "ready", version };
     }
     return { ok: true, state: "current", version: app.getVersion() };
   } catch (error) {
@@ -6006,6 +6065,10 @@ ipcMain.handle("check-for-updates", async () => {
 /** Reinício para instalar — o utilizador escolhe o momento, na linha das Definições. */
 ipcMain.on("install-update-now", () => {
   diagLog("[Update] Install requested by the user");
+  if (!canSelfInstallUpdate()) {
+    shell.openExternal(UPDATE_RELEASES_URL).catch(() => {});
+    return;
+  }
   beginUpdateInstall();
 });
 
@@ -7022,6 +7085,11 @@ ipcMain.handle("get-file-icon", async (event, filePath) => {
 async function extractIconUncached(filePath) {
   try {
     diagLog(`[IconRequest] Fetching icon for: ${filePath}`);
+    if (unixPlatform) {
+      const unixIcon = await unixPlatform.getIconDataUrl(filePath);
+      if (unixIcon) rememberFileIcon(filePath, unixIcon);
+      return unixIcon;
+    }
 
     // 1. Resolve shell paths
     let resolvedPath = resolveShellPath(filePath);
@@ -7161,6 +7229,15 @@ ipcMain.handle("get-installed-apps", async (event, forceRefresh = false) => {
   if (installedAppsCache && !forceRefresh) {
     return installedAppsCache;
   }
+  if (unixPlatform) {
+    try {
+      installedAppsCache = unixPlatform.listInstalledApps();
+    } catch (e) {
+      diagLog(`[Apps] Unix scan failed: ${e.message}`);
+      installedAppsCache = [];
+    }
+    return installedAppsCache;
+  }
 
   return new Promise((resolve) => {
     const { exec } = require("child_process");
@@ -7225,6 +7302,7 @@ app.on("window-all-closed", (e) => {
 });
 
 app.on("will-quit", () => {
+  if (unixPlatform) unixPlatform.stopHook();
   /** Primeiro os helpers: enquanto viverem, o instalador não consegue tocar na pasta. */
   stopMouseHookForShutdown();
   stopRadialMouseBlocker();

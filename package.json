@@ -21,7 +21,8 @@
     "verify:radial-windowing": "node scripts/verify-radial-windowing.mjs",
     "release": "node scripts/release.mjs",
     "release:check": "node scripts/release.mjs --check",
-    "dist:store": "npm run build && node scripts/run-electron-builder.mjs --win appx --publish never"
+    "dist:store": "npm run build && node scripts/run-electron-builder.mjs --win appx --publish never",
+    "test:platform-unix": "node --test backend/platform-unix.test.cjs"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.3.0",
@@ -36,7 +37,8 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "sql.js": "^1.14.1",
-    "tailwindcss": "^4.3.0"
+    "tailwindcss": "^4.3.0",
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
@@ -68,7 +70,8 @@
       "backend/*.ps1",
       "resources/bin/**/*",
       "node_modules/sql.js/dist/sql-wasm.wasm",
-      "node_modules/active-win/**/*"
+      "node_modules/active-win/**/*",
+      "node_modules/uiohook-napi/**/*"
     ],
     "directories": {
       "output": "build-out"
@@ -114,6 +117,56 @@
       "languages": [
         "en-US"
       ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "public/icon.png",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "O Rovyl abre os aplicativos que você escolhe no menu radial."
+      }
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icon.png",
+      "category": "Utility",
+      "maintainer": "vitorkloy <vitorkloy@users.noreply.github.com>",
+      "synopsis": "Radial launcher",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     }
   },
   "engines": {

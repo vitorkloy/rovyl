@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build
 
 on:
   push:
@@ -21,7 +21,34 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: rovyl-windows
+            builder_args: --win nsis
+            files: |
+              build-out/Rovyl.exe
+              build-out/Rovyl.exe.blockmap
+              build-out/latest.yml
+          - os: macos-latest
+            artifact: rovyl-macos
+            builder_args: --mac dmg zip --x64 --arm64
+            files: |
+              build-out/*.dmg
+              build-out/*.zip
+              build-out/*.blockmap
+              build-out/latest-mac.yml
+          - os: ubuntu-latest
+            artifact: rovyl-linux
+            builder_args: --linux AppImage deb --x64
+            files: |
+              build-out/*.AppImage
+              build-out/*.deb
+              build-out/latest-linux.yml
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,21 +57,25 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Linux build deps (uiohook-napi, X11)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libx11-dev libxtst-dev libxt-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxkbfile-dev
       - run: npm ci
-      - name: Build (vite + electron-builder, sem publicar)
+      - run: npm run test:platform-unix
+      - name: Build (vite + electron-builder, sem publicar, sem assinatura)
+        shell: bash
         run: |
           npm run build
-          node scripts/run-electron-builder.mjs --win nsis --publish never
+          node scripts/run-electron-builder.mjs ${{ matrix.builder_args }} --publish never
         env:
           ZENITH_BUILD_OUTPUT: build-out
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: actions/upload-artifact@v4
         with:
-          name: rovyl-windows
-          path: |
-            build-out/Rovyl.exe
-            build-out/Rovyl.exe.blockmap
-            build-out/latest.yml
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
           if-no-files-found: error
 
   release:
@@ -54,9 +85,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: rovyl-windows
+          pattern: rovyl-*
           path: dist
-      - name: Publish GitHub Release (uma vez por tag)
+          merge-multiple: true
+      - name: Publish GitHub Release (uma vez por tag, 3 SOs)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag || github.ref_name }}
@@ -64,5 +96,9 @@ jobs:
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG já existe — nada a fazer."; exit 0
           fi
-          gh release create "$TAG" dist/Rovyl.exe dist/Rovyl.exe.blockmap dist/latest.yml \
+          ls -la dist
+          for f in Rovyl.exe Rovyl.exe.blockmap latest.yml latest-mac.yml latest-linux.yml; do
+            test -f "dist/$f" || { echo "faltando dist/$f"; exit 1; }
+          done
+          gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "Rovyl $TAG" --generate-notes --verify-tag
