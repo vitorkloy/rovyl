@@ -1,0 +1,54 @@
+name: Sync upstream
+
+# Traz o main de HenryCauan/rovyl para o main deste fork.
+# Merge limpo -> push direto no main. Conflito -> abre PR (nunca força).
+# Não cria tag nem release.
+on:
+  schedule:
+    - cron: "0 9 * * *" # 06:00 em São Paulo
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # GITHUB_TOKEN não pode dar push em commits que mexem em .github/workflows.
+          # Se o upstream alterar workflows, crie o secret SYNC_TOKEN (PAT com repo + workflow).
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Merge upstream/main
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/HenryCauan/rovyl.git
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Já está em dia com o upstream."; exit 0
+          fi
+          if git merge --no-edit upstream/main; then
+            git push origin HEAD:main
+            echo "Merge do upstream aplicado no main."
+          else
+            git merge --abort
+            BR="sync/upstream-$(git rev-parse --short upstream/main)"
+            git push -f origin "upstream/main:refs/heads/$BR"
+            if [ -z "$(gh pr list --head "$BR" --state open --json number -q '.[].number')" ]; then
+              gh pr create --base main --head "$BR" \
+                --title "Sync upstream (conflito): HenryCauan/rovyl@$(git rev-parse --short upstream/main)" \
+                --body "O merge automático do upstream deu conflito. Resolva nesta PR e faça merge manualmente."
+            fi
+          fi
